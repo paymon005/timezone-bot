@@ -64,6 +64,10 @@ client.on('messageCreate', async (message) => {
 		helpCommand(message, args)
 	} else if (command === "role") {
 		roleCommand(message, args)
+	} else if (command === "timer") {
+		timerCommand(message, args)
+	} else if (command === "alarm") {
+		alarmCommand(message, args)
 	}
 });
 
@@ -131,7 +135,7 @@ async function timeCommand(message, args) {
 	}
 	
 	if (user in AllZones) {
-		[hours, mins, offset] = calculateTime(AllZones[message.author],AllZones[user],time,setTime)
+		[hours, mins, _, offset] = calculateTime(AllZones[message.author],AllZones[user],time,setTime)
 		return message.reply(printTime(hours, mins));
 	} else {
 		return message.reply(user.username + " has not defined a timezone.")
@@ -294,7 +298,136 @@ async function roleCommand(message, args) {
 		return message.reply("No users with this role have set a timezone.");
 	}
 }
-
+//////////////////////////////TIMER//////////////////////////////
+async function timerCommand(message, args) {
+	var mention_prefix = ''
+	myLogger.log(Date() + ": Creating timer for " + message.author.username)
+	if (args.length > 2) {
+		return message.reply("Too many input arguments.");
+	} else if (args.length > 0){
+		if ( !Number.isInteger(parseInt(args[0],10)) ) {
+			return message.reply("You fucked up your input dumbass. Use *help");
+		} else {
+			var duration = parseInt(args[0],10);
+			if (args.length > 1) {
+				var mention = message.mentions.users.first();
+				myLogger.log(Date() + ": mention " + mention)
+				if (mention === undefined) {
+					mention = message.mentions.roles.first();
+					mention_prefix = '&'
+					myLogger.log(Date() + ": mention " + mention)
+					if (mention === undefined) {
+						return message.reply("You fucked up your input dumbass. Use *help");
+					}
+				} 
+				var id_to_mention = mention.id;
+				myLogger.log(Date() + ": mention.id " + mention.id)
+			} else {
+				var id_to_mention = message.author.id;
+			}
+		}
+	} else {
+		return message.reply("You must enter a duration!");
+	}
+	
+	if (duration > 1440) {
+		return message.reply("You cannot set a timer for longer than a day");
+	}
+	
+	if (duration > 1){
+		message.reply("Set to alert <@" + mention_prefix + id_to_mention + "> in " + duration + " minutes."); 
+	} else {
+		message.reply("Set to alert <@" + mention_prefix + id_to_mention + "> in " + duration + " minute."); 
+	}
+	await new Promise(r => setTimeout(r, duration*1000*60));
+	message.reply("Time is up! <@" + mention_prefix + id_to_mention + ">");
+}
+//////////////////////////////ALARM//////////////////////////////
+async function alarmCommand(message, args) {
+	var AllZones = readTimezoneData();
+	var hours_start = 0;
+	var mins_start = 0;
+	var sec_start = 0;
+	var hours_end = 0;
+	var mins_end = 0;
+	var sec_end = 0;
+	var mention_prefix = '';
+	var user = message.author;
+	
+	myLogger.log(Date() + ": Creating timer for " + message.author.username)
+	if (args.length > 2) {
+		return message.reply("Too many input arguments.");
+	} else if (args.length > 0){
+		if ( !checkTime(args[0]) ) {
+			return message.reply("You fucked up your input dumbass. Use *help");
+		} else {
+			var time = args[0];
+			if (args.length > 1) {
+				var mention = message.mentions.users.first();
+				myLogger.log(Date() + ": mention " + mention)
+				if (mention === undefined) {
+					mention = message.mentions.roles.first();
+					mention_prefix = '&'
+					myLogger.log(Date() + ": mention " + mention)
+					if (mention === undefined) {
+						return message.reply("You fucked up your input dumbass. Use *help");
+					}
+				} 
+				var id_to_mention = mention.id;
+				myLogger.log(Date() + ": mention.id " + mention.id)
+			} else {
+				var id_to_mention = message.author.id;
+			}
+		}
+	} else {
+		return message.reply("You must enter a time!");
+	}
+	
+	
+	if (user in AllZones) {
+		[hours_start, mins_start, sec_start] = calculateTime(AllZones[message.author],'America/Phoenix','',false)
+		await new Promise(r => setTimeout(r, duration*1000));
+		[hours_end, mins_end] = calculateTime(AllZones[message.author],'America/Phoenix',time,true)
+		var hour_diff = 0
+		if (hours_end < hours_start) {
+			hour_diff = 24 - hours_start
+			hour_diff += hours_end
+		} else if (hours_end === hours_start) {
+			if (mins_end < mins_start) {
+				hour_diff = 23
+			} else {
+				hour_diff = 0
+			}
+		} else {
+			hour_diff = hours_end - hours_start
+		}
+		var min_diff = 0
+		if (mins_end < mins_start) {
+			min_diff = 60 - mins_start
+			min_diff += mins_end
+		} else if (mins_end === mins_start){
+			min_diff = 0
+		} else {
+			min_diff = mins_end - mins_start - 1
+		}
+		var sec_diff = 60 - sec_start
+		var duration = hour_diff*60*60 + min_diff*60 + sec_diff
+	} else {
+		return message.reply("You have not defined a timezone.")
+	}
+	
+	if (duration/60 > 1440) {
+		return message.reply("You cannot set an alarm for further than a day away.");
+	}
+	
+	if (duration/60 > 1){
+		message.reply("Alerting <@" + mention_prefix + id_to_mention + "> at " + time + " or in " + Math.round(duration/60) + " minutes."); 
+	} else {
+		message.reply("Alerting <@" + mention_prefix + id_to_mention + "> at " + time + " or in " + Math.round(duration/60) + " minute."); 
+	}
+	await new Promise(r => setTimeout(r, duration*1000));
+	message.reply("Time is up! <@" + mention_prefix + id_to_mention + ">");
+}
 ////////////////////////OTHER FUNCTIONS/////////////////////////////
 
 function calculateTime(tz_from,tz_to,time,setTime) {
@@ -313,10 +446,6 @@ function calculateTime(tz_from,tz_to,time,setTime) {
 		var curr_min = d_from.getMinutes();
 	}
 	
-	myLogger.log(Date() + ": tz_to" + tz_to)
-	myLogger.log(Date() + ": to_hours" + to_hours)
-
-	
 	if (to_hours < 0) {
 		var curr_hour = 24+to_hours
 	} else if (to_hours >= 24) {
@@ -324,8 +453,12 @@ function calculateTime(tz_from,tz_to,time,setTime) {
 	} else {
 		var curr_hour = to_hours
 	}
-
-	return [curr_hour, curr_min, diff_hours, tz_to];
+	
+	curr_sec = d_from.getSeconds();
+	myLogger.log(Date() + ": curr_hour = " + curr_hour)
+	myLogger.log(Date() + ": curr_min = " + curr_min)
+	myLogger.log(Date() + ": curr_sec = " + curr_sec)
+	return [curr_hour, curr_min, curr_sec, diff_hours, tz_to]
 }
 
 function readTimezoneData() {
@@ -452,7 +585,7 @@ function parseGroup(group,time,setTime,message,AllZones,groupType) {
 		for (var i = 0; i < group.length; i++) {
 			if (group[i] in AllZones) {
 				data_list[cnt] = {};
-				[data_list[cnt].hour, data_list[cnt].min, data_list[cnt].offset, data_list[cnt].tz] = calculateTime(AllZones[message.author],AllZones[group[i]],time,setTime);
+				[data_list[cnt].hour, data_list[cnt].min, _, data_list[cnt].offset, data_list[cnt].tz] = calculateTime(AllZones[message.author],AllZones[group[i]],time,setTime);
 				if (groupType === 'all') {
 					data_list[cnt].name = group[i].displayName //server members object
 				} else {
@@ -506,13 +639,16 @@ function sendStringToDiscord(message,str) {
 
 function checkTime(time) {
 	const myArray = time.split(":");
+	if (myArray.length != 2){
+		return false
+	}
 	if (myArray[0].length > 2 || myArray[1].length != 2){
 		return false
 	}
 	if ( !isNumeric(myArray[0]) || !isNumeric(myArray[1]) ){
 		return false
 	}
-	if ( parseInt(myArray[0],10) < 0 || parseInt(myArray[0],10) < 0 ){
+	if ( parseInt(myArray[0],10) < 0 || parseInt(myArray[1],10) < 0 ){
 		return false
 	}
 	if ( parseInt(myArray[0],10) > 23 || parseInt(myArray[1],10) > 59 ){
@@ -525,4 +661,9 @@ function isNumeric(str) {
   if (typeof str != "string") return false // we only process strings!  
   return !isNaN(str) && // use type coercion to parse the _entirety_ of the string (`parseFloat` alone does not do this)...
          !isNaN(parseFloat(str)) // ...and ensure strings of whitespace fail
+}
+
+function calc_time_diff(hours_start, min_start, hours_end, min_end){
+	
+	
 }

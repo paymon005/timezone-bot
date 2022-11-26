@@ -5,7 +5,7 @@ read bot error log
 cat errStdErr.txt
 
 read pm2 error log
-~/.pm2/logs/index-error.log
+cat ~/.pm2/logs/timezone-error.log
 
 read timezone data
 cat data.json
