@@ -1,1 +1,26 @@
+# --- Secrets: never commit these ---
+# config.json holds the bot token, a Google API key and a TimezoneDB key.
 config.json
+.env
+.env.*
+!.env.example
+
+# --- User data ---
+# Maps people to their timezones. Real users' data, and per-host state.
+data.json
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+
+# --- Runtime logs ---
+normalStdout.txt
+errStdErr.txt
+*.log
+
+# --- Editors / OS / Windows junk ---
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*:Zone.Identifier

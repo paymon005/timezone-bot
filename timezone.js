@@ -71,7 +71,194 @@ client.on('messageCreate', async (message) => {
 	}
 });
 
-client.login(config.token);
+////////////////////////////SLASH COMMANDS////////////////////////////
+// The command functions below take a discord.js Message plus a positional args
+// array. Rather than rewrite them, an interaction is wrapped in a message-shaped
+// adapter and its typed options are flattened back into the same positional args
+// each function already parses. The prefix commands above keep working unchanged.
+
+const { REST, Routes, ApplicationCommandOptionType: OptType, Role } = require('discord.js');
+
+const TIME_HINT = '24hr time, e.g. 15:45';
+
+const SLASH_COMMANDS = [
+	{ name: 'set', description: 'Set your timezone (city/state or IANA name)', options: [
+		{ name: 'zone', description: 'Dallas, TX  or  America/Chicago', type: OptType.String, required: true },
+		{ name: 'user', description: 'Set it for someone else (mods only)', type: OptType.User },
+	]},
+	{ name: 'time', description: "Show a user's local time", options: [
+		{ name: 'user', description: 'Whose time to show', type: OptType.User, required: true },
+		{ name: 'time', description: TIME_HINT, type: OptType.String },
+	]},
+	{ name: 'all', description: 'Show the time for everyone with a timezone set', options: [
+		{ name: 'time', description: TIME_HINT, type: OptType.String },
+	]},
+	{ name: 'check', description: "Check a user's configured timezone", options: [
+		{ name: 'user', description: 'Whose timezone to check', type: OptType.User, required: true },
+	]},
+	{ name: 'remove', description: 'Remove a timezone from the database', options: [
+		{ name: 'user', description: 'Remove someone else (mods only)', type: OptType.User },
+	]},
+	{ name: 'map', description: 'Map of IANA timezones in the USA' },
+	{ name: 'help', description: 'List the commands' },
+	{ name: 'role', description: 'Show the time for everyone with a role', options: [
+		{ name: 'role', description: 'Which role', type: OptType.Role, required: true },
+		{ name: 'time', description: TIME_HINT, type: OptType.String },
+	]},
+	{ name: 'timer', description: 'Ping after a number of minutes', options: [
+		{ name: 'duration', description: 'Minutes (max 1440)', type: OptType.Integer, required: true },
+		{ name: 'target', description: 'Who to ping (defaults to you)', type: OptType.Mentionable },
+	]},
+	{ name: 'alarm', description: 'Ping at a given time', options: [
+		{ name: 'time', description: TIME_HINT, type: OptType.String, required: true },
+		{ name: 'target', description: 'Who to ping (defaults to you)', type: OptType.Mentionable },
+	]},
+];
+
+// A Mentionable option is a User, a GuildMember or a Role; the commands ask for
+// users and roles separately, so split it back apart.
+function splitMentionable(target) {
+	if (!target) return [null, null];
+	if (target instanceof Role) return [null, target];
+	return [target.user || target, null];
+}
+
+// Pure: turn a slash command's named options back into the positional args the
+// matching *Command function parses. Each case mirrors that function's own
+// arg-length branching, which is what makes this worth isolating and testing.
+function buildArgs(name, o) {
+	const userMention = o.userId ? '<@' + o.userId + '>' : null;
+	const roleMention = o.roleId ? '<@&' + o.roleId + '>' : null;
+	switch (name) {
+		// setCommand pops the mention off the end, then joins the rest as the zone.
+		case 'set':    return userMention ? o.zone.split(/ +/g).concat(userMention) : o.zone.split(/ +/g);
+		// timeCommand: 2 args means "time + mention", 1 means "mention only".
+		case 'time':   return o.time ? [o.time, userMention] : [userMention];
+		case 'all':    return o.time ? [o.time] : [];
+		case 'check':  return [userMention];
+		// removeCommand reads the mention only, never args.
+		case 'remove': return [];
+		// roleCommand also branches on length 2 vs anything else.
+		case 'role':   return o.time ? [o.time, roleMention] : [roleMention];
+		// timer/alarm only check args.length > 1 to decide whether to look for a
+		// mention, so the second element's value is irrelevant — only its presence.
+		case 'timer':  return (userMention || roleMention) ? [String(o.duration), 'mention'] : [String(o.duration)];
+		case 'alarm':  return (userMention || roleMention) ? [o.time, 'mention'] : [o.time];
+		default:       return [];
+	}
+}
+
+function messageAdapter(interaction, user, role) {
+	let usedInteraction = false;
+	let repliedAtAll = false;
+	return {
+		author: interaction.user,
+		guild: interaction.guild,
+		channel: interaction.channel,
+		member: interaction.member,
+		mentions: {
+			users:   { first: () => user || undefined },
+			members: { first: () => (user ? interaction.guild.members.cache.get(user.id) || user : undefined) },
+			roles:   { first: () => role || undefined },
+		},
+		didReply: () => repliedAtAll,
+		reply: async (content) => {
+			repliedAtAll = true;
+			if (!usedInteraction) {
+				usedInteraction = true;
+				try {
+					return (interaction.deferred || interaction.replied)
+						? await interaction.editReply(content)
+						: await interaction.reply(content);
+				} catch (err) {
+					myLogger.log(Date() + ": interaction reply failed, falling back to channel: " + err);
+				}
+			}
+			return interaction.channel.send(content);
+		},
+	};
+}
+
+client.on('interactionCreate', async (interaction) => {
+	if (!interaction.isChatInputCommand()) return;
+	if (!interaction.guild) {
+		return interaction.reply({ content: 'Use me in a server, not a DM.', ephemeral: true });
+	}
+
+	const name = interaction.commandName;
+	const str = (n) => {
+		const v = interaction.options.getString(n);
+		return v === null || v === undefined ? null : String(v).trim();
+	};
+	if (!SLASH_COMMANDS.some((c) => c.name === name)) {
+		return interaction.reply({ content: 'Unknown command.', ephemeral: true });
+	}
+
+	let user = null;
+	let role = null;
+	if (name === 'timer' || name === 'alarm') {
+		[user, role] = splitMentionable(interaction.options.getMentionable('target'));
+	} else {
+		if (name === 'role') role = interaction.options.getRole('role');
+		else user = interaction.options.getUser('user');
+	}
+
+	const args = buildArgs(name, {
+		zone: str('zone'),
+		time: str('time'),
+		duration: interaction.options.getInteger('duration'),
+		userId: user ? user.id : null,
+		roleId: role ? role.id : null,
+	});
+
+	// members.fetch and the geocoding lookup both routinely take longer than the
+	// three seconds an interaction gets before Discord marks it failed.
+	try {
+		await interaction.deferReply();
+	} catch (err) {
+		myLogger.log(Date() + ": could not defer " + name + ": " + err);
+		return;
+	}
+
+	const shim = messageAdapter(interaction, user, role);
+	const handlers = {
+		set: setCommand, time: timeCommand, all: allCommand, check: checkCommand,
+		remove: removeCommand, map: mapCommand, help: helpCommand, role: roleCommand,
+		timer: timerCommand, alarm: alarmCommand,
+	};
+
+	try {
+		await handlers[name](shim, args);
+	} catch (err) {
+		myLogger.log(Date() + ": /" + name + " threw: " + (err && err.stack ? err.stack : err));
+	}
+	// A deferred interaction left unanswered shows "thinking..." forever.
+	if (!shim.didReply()) {
+		try { await interaction.editReply('Something went wrong running that.'); } catch (e) {}
+	}
+});
+
+client.once('ready', async () => {
+	// Registered per guild rather than globally: a global registration can take
+	// an hour to appear, a guild one is immediate.
+	const rest = new REST({ version: '10' }).setToken(config.token);
+	for (const [guildId, guild] of client.guilds.cache) {
+		try {
+			await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: SLASH_COMMANDS });
+			myLogger.log(Date() + ": registered " + SLASH_COMMANDS.length + " slash commands in " + guild.name);
+		} catch (err) {
+			myLogger.log(Date() + ": could not register slash commands in " + guild.name + ": " + err
+				+ " (re-invite with the applications.commands scope; prefix commands still work)");
+		}
+	}
+});
+
+// Only connect when run as the entry point, so the arg mapping above can be
+// required and tested without logging a second client into Discord.
+if (require.main === module) {
+	client.login(config.token);
+}
+module.exports = { buildArgs, splitMentionable, SLASH_COMMANDS };
 
 //////////////////////////////SET//////////////////////////////
 async function setCommand(message, args) {
@@ -335,9 +522,9 @@ async function timerCommand(message, args) {
 	}
 	
 	if (duration > 1){
-		message.reply("Set to alert <@" + mention_prefix + id_to_mention + "> in " + duration + " minutes."); 
+		message.reply("Alerting <@" + mention_prefix + id_to_mention + "> in " + duration + " minutes."); 
 	} else {
-		message.reply("Set to alert <@" + mention_prefix + id_to_mention + "> in " + duration + " minute."); 
+		message.reply("Alerting <@" + mention_prefix + id_to_mention + "> in " + duration + " minute."); 
 	}
 	await new Promise(r => setTimeout(r, duration*1000*60));
 	message.reply("Time is up! <@" + mention_prefix + id_to_mention + ">");
@@ -385,8 +572,7 @@ async function alarmCommand(message, args) {
 	
 	
 	if (user in AllZones) {
-		[hours_start, mins_start, sec_start] = calculateTime(AllZones[message.author],'America/Phoenix','',false)
-		await new Promise(r => setTimeout(r, duration*1000));
+		[hours_start, mins_start, sec_start] = calculateTime(AllZones[message.author],'America/Phoenix','',false);
 		[hours_end, mins_end] = calculateTime(AllZones[message.author],'America/Phoenix',time,true)
 		var hour_diff = 0
 		if (hours_end < hours_start) {
